@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="comfyui"
+REPO_DIR="../comfyui"
 
 if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "Dépôt $REPO_DIR introuvable. Exécutez ./install.sh d'abord."
+  echo "Dépôt $REPO_DIR introuvable. Exécutez ../install.sh d'abord."
   exit 1
 fi
 
