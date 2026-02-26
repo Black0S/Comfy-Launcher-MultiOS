@@ -5,41 +5,41 @@ REPO_DIR="comfyui"
 REPO_URL="https://github.com/comfyanonymous/ComfyUI.git"
 VENV_DIR="$REPO_DIR/.venv"
 
-echo "==> Vérification Homebrew"
+echo "==> Checking Homebrew"
 if ! command -v brew >/dev/null 2>&1; then
-  echo "Homebrew non trouvé. Veuillez l'installer depuis https://brew.sh/ puis relancer ce script."
+  echo "Homebrew not found. You should install it from https://brew.sh/ then re-run this script."
   exit 1
 fi
 
-echo "==> Vérification / installation de python3.13"
+echo "==> Check / installing of python3.13"
 if ! command -v python3.13 >/dev/null 2>&1; then
-  echo "python3.13 non trouvé. Installation via Homebrew..."
+  echo "python3.13 not found. Install with Homebrew..."
   brew update
   brew install python@3.13
 fi
 
-echo "==> Clonage / mise à jour du dépôt ComfyUI dans ./$REPO_DIR"
+echo "==> Clone / update of ComfyUI repo in ./$REPO_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
-  echo "Le dépôt existe déjà. Récupération des dernières modifications..."
+  echo "The repo all ready exist. Get the last modifications..."
   git -C "$REPO_DIR" pull --rebase
 else
   git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-echo "==> Installation de ComfyUI-Manager dans $REPO_DIR/custom_nodes"
+echo "==> Installing of ComfyUI-Manager in $REPO_DIR/custom_nodes"
 CUSTOM_NODES_DIR="$REPO_DIR/custom_nodes"
 MANAGER_DIR="$CUSTOM_NODES_DIR/comfyui-manager"
 mkdir -p "$CUSTOM_NODES_DIR"
 if [ -d "$MANAGER_DIR/.git" ]; then
-  echo "ComfyUI-Manager existe déjà, mise à jour..."
+  echo "ComfyUI-Manager all ready exist, update..."
   git -C "$MANAGER_DIR" pull --rebase
 else
   git clone https://github.com/ltdrdata/ComfyUI-Manager "$MANAGER_DIR"
 fi
 
-echo "==> Création / réutilisation d'un virtualenv dans $VENV_DIR"
+echo "==> Creating / reusing a virtualenv in $VENV_DIR"
 if [ -d "$VENV_DIR" ]; then
-  echo "Virtualenv existant trouvé, réutilisation."
+  echo "Existing virtualenv found, reusing it."
 else
   python3.13 -m venv "$VENV_DIR"
 fi
@@ -47,13 +47,13 @@ fi
 VENV_PY="$VENV_DIR/bin/python"
 VENV_PIP="$VENV_DIR/bin/pip"
 
-echo "==> Mise à jour pip dans le virtualenv"
+echo "==> Updating pip in the virtualenv"
 "$VENV_PY" -m pip install --upgrade pip setuptools wheel
 
-echo "==> Installation de torch/nightly (CPU) dans le virtualenv"
+echo "==> Installing torch/nightly (CPU) in the virtualenv"
 "$VENV_PY" -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
 
-echo "==> Installation des dépendances de ComfyUI dans le virtualenv"
+echo "==> Installing ComfyUI dependencies in the virtualenv"
 "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt"
 
-echo "==> Installation terminée. Pour lancer : ./launch.sh"
+echo "==> Installation complete. To launch: ./launch.sh"
