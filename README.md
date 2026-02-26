@@ -44,6 +44,8 @@ cd <repo-folder>
 chmod +x install.sh launch.sh "Update Scripts/update-comfyui.sh" "Update Scripts/update-torch.sh"
 ```
 
+`To execute .sh scripts you need to be where there are.`
+
 ### 2. Run the Installer
 
 Clones ComfyUI, creates a local virtual environment, and installs all dependencies:
@@ -61,24 +63,26 @@ Clones ComfyUI, creates a local virtual environment, and installs all dependenci
 ### 4. Update ComfyUI
 
 ```bash
-./Update\ Scripts/update-comfyui.sh
+cd `Update Scripts/`
+```
+```bash
+./update-comfyui.sh
 ```
 
 ### 5. Update PyTorch (Nightly)
 
 ```bash
-./Update\ Scripts/update-torch.sh
+cd `Update Scripts/`
+```
+```bash
+./update-torch.sh
 ```
 
 ---
 
 ## 🌐 Access & Shutdown
 
-**Web Interface** — Once ComfyUI is running, open your browser at:
-
-```
-http://127.0.0.1:8188
-```
+**Web Interface** — Once ComfyUI is running, open your browser at: http://127.0.0.1:8188
 
 **Startup Time** — First launch may take longer depending on your machine's specs and initialization time. Please be patient.
 
