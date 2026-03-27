@@ -15,10 +15,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 read -rp "Your choice [1-4]: " OS_CHOICE
 
 case "$OS_CHOICE" in
-  1) OS_TYPE="Fedora"  ;;
-  2) OS_TYPE="Arch"    ;;
-  3) OS_TYPE="Ubuntu"  ;;
-  4) OS_TYPE="MacOS"   ;;
+  1) OS_TYPE="fedora" ;;
+  2) OS_TYPE="arch"   ;;
+  3) OS_TYPE="ubuntu" ;;
+  4) OS_TYPE="macos"  ;;
   *)
     echo "❌ Invalid choice. Exiting."
     exit 1
@@ -31,34 +31,33 @@ echo ""
 # PRE-CHECKS
 # ─────────────────────────────────────────────────────────────
 if [ ! -d "comfyui" ]; then
-    echo "❌ Error: the directory 'comfyui' does not exist."
-    echo "Make sure you have run './install.sh' first."
-    exit 1
+  echo "❌ Directory 'comfyui' not found. Run ./install.sh first."
+  exit 1
 fi
 
 if [ ! -d "comfyui/.venv" ]; then
-    echo "❌ Error: the virtual environment 'comfyui/.venv' does not exist."
-    echo "Make sure you have run './install.sh' first."
-    exit 1
+  echo "❌ Virtualenv 'comfyui/.venv' not found. Run ./install.sh first."
+  exit 1
 fi
 
-echo "📦 Activating venv and updating pip..."
-source comfyui/.venv/bin/activate
-pip install --upgrade pip
+VENV_PY="comfyui/.venv/bin/python"
+
+echo "==> Updating pip..."
+"$VENV_PY" -m pip install --upgrade pip
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ─────────────────────────────────────────────────────────────
-# PYTORCH INSTALLATION — platform-specific
+# PYTORCH INSTALLATION
 # ─────────────────────────────────────────────────────────────
 if [ "$OS_TYPE" = "macos" ]; then
   echo "🔄 Updating PyTorch (nightly, CPU — macOS)..."
-  echo "📥 Installing PyTorch and torchvision (nightly, CPU)..."
-  pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
+  "$VENV_PY" -m pip install --pre torch torchvision \
+    --index-url https://download.pytorch.org/whl/nightly/cpu
 else
   echo "🔄 Updating PyTorch (stable, CUDA 13.0 — Linux)..."
-  echo "📥 Installing PyTorch, torchvision, torchaudio (stable, CUDA 13.0)..."
-  pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130
+  "$VENV_PY" -m pip install torch torchvision torchaudio \
+    --extra-index-url https://download.pytorch.org/whl/cu130
 fi
 
 echo ""
@@ -68,7 +67,7 @@ echo ""
 echo "📊 Installed versions:"
 
 if [ "$OS_TYPE" = "macos" ]; then
-  python -c "
+  "$VENV_PY" -c "
 import torch
 print(f'PyTorch:        {torch.__version__}')
 print(f'MPS available:  {torch.backends.mps.is_available()}')
@@ -78,7 +77,7 @@ else:
     print('GPU:            N/A (CPU only)')
 "
 else
-  python -c "
+  "$VENV_PY" -c "
 import torch
 print(f'PyTorch:        {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')

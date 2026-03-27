@@ -12,17 +12,17 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  ComfyUI Installer — Select your OS"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  1) Fedora / RHEL / CentOS   (dnf)"
-echo "  2) Arch Linux               (pacman)"
+echo "  2) Arch Linux               (pacman + pyenv)"
 echo "  3) Ubuntu / Debian          (apt)"
 echo "  4) macOS                    (brew)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 read -rp "Your choice [1-4]: " OS_CHOICE
 
 case "$OS_CHOICE" in
-  1) OS_TYPE="Fedora"  ;;
-  2) OS_TYPE="Arch"    ;;
-  3) OS_TYPE="Ubuntu"  ;;
-  4) OS_TYPE="MacOS"   ;;
+  1) OS_TYPE="fedora" ;;
+  2) OS_TYPE="arch"   ;;
+  3) OS_TYPE="ubuntu" ;;
+  4) OS_TYPE="macos"  ;;
   *)
     echo "❌ Invalid choice. Exiting."
     exit 1
@@ -56,7 +56,7 @@ echo "✅ Selected: Python $PY_VERSION"
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-# PACKAGE MANAGER HELPERS
+# PACKAGE INSTALL HELPER
 # ─────────────────────────────────────────────────────────────
 pkg_install() {
   case "$OS_TYPE" in
@@ -73,8 +73,9 @@ pkg_install() {
 echo "==> Checking system dependencies"
 MISSING_PKGS=()
 command -v git >/dev/null 2>&1 || MISSING_PKGS+=(git)
+
 if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
-  echo "Installing missing packages: ${MISSING_PKGS[*]}"
+  echo "Installing: ${MISSING_PKGS[*]}"
   pkg_install "${MISSING_PKGS[@]}"
 fi
 echo "✅ git $(git --version | awk '{print $3}')"
@@ -83,37 +84,122 @@ echo "✅ git $(git --version | awk '{print $3}')"
 # PYTHON INSTALLATION
 # ─────────────────────────────────────────────────────────────
 echo "==> Checking Python $PY_VERSION"
-if ! command -v "python$PY_VERSION" >/dev/null 2>&1; then
-  echo "python$PY_VERSION not found. Installing..."
-  case "$OS_TYPE" in
-    fedora) sudo dnf install -y "python$PY_VERSION" ;;
-    arch)   sudo pacman -S --noconfirm "python$PY_VERSION" ;;
-    ubuntu) sudo apt-get install -y "python$PY_VERSION" "python${PY_VERSION}-venv" ;;
-    macos)  brew install "python@$PY_VERSION" ;;
-  esac
+
+# Helper: resolve latest patch version from pyenv list (e.g. 3.13 → 3.13.3)
+get_latest_patch() {
+  local major_minor="$1"
+  pyenv install --list 2>/dev/null \
+    | grep -E "^\s*${major_minor}\.[0-9]+$" \
+    | sed 's/ //g' \
+    | sort -V \
+    | tail -n 1
+}
+
+if [ "$OS_TYPE" = "arch" ]; then
+  # ── Arch Linux: pyenv ──────────────────────────────────────
+  echo "==> Setting up pyenv (Arch Linux)"
+
+  # Always ensure build deps are present
+  sudo pacman -S --noconfirm --needed \
+    base-devel openssl zlib xz tk libffi bzip2 readline sqlite curl git llvm ncurses
+
+  if ! command -v pyenv >/dev/null 2>&1; then
+    echo "==> pyenv not found. Installing via AUR..."
+    if command -v yay >/dev/null 2>&1; then
+      yay -S --noconfirm pyenv
+    elif command -v paru >/dev/null 2>&1; then
+      paru -S --noconfirm pyenv
+    else
+      echo "❌ yay or paru is required to install pyenv on Arch."
+      echo "   Install one of them first and rerun this script."
+      exit 1
+    fi
+  else
+    echo "==> pyenv already installed"
+  fi
+
+  # Init pyenv for this session
+  export PYENV_ROOT="$HOME/.pyenv"
+  export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
+  eval "$(pyenv init --path)"
+  eval "$(pyenv init -)"
+
+  # Persist pyenv config in shell rc if not already present
+  SHELL_RC=""
+  if [ -f "$HOME/.bashrc" ]; then SHELL_RC="$HOME/.bashrc"
+  elif [ -f "$HOME/.zshrc" ]; then SHELL_RC="$HOME/.zshrc"
+  fi
+
+  if [ -n "$SHELL_RC" ] && ! grep -q "pyenv init" "$SHELL_RC"; then
+    {
+      echo ""
+      echo "# pyenv"
+      echo 'export PYENV_ROOT="$HOME/.pyenv"'
+      echo 'export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"'
+      echo 'eval "$(pyenv init --path)"'
+      echo 'eval "$(pyenv init -)"'
+    } >> "$SHELL_RC"
+    echo "✅ pyenv configured in $SHELL_RC"
+  fi
+
+  # Resolve and install the latest patch version
+  FULL_PY_VERSION="$(get_latest_patch "$PY_VERSION")"
+  if [ -z "$FULL_PY_VERSION" ]; then
+    echo "❌ Could not resolve a patch version for Python $PY_VERSION. Exiting."
+    exit 1
+  fi
+  echo "==> Installing Python $FULL_PY_VERSION via pyenv"
+
+  if pyenv versions --bare | grep -q "^${FULL_PY_VERSION}$"; then
+    echo "Python $FULL_PY_VERSION already installed in pyenv."
+  else
+    pyenv install "$FULL_PY_VERSION"
+  fi
+
+  pyenv rehash
+  PYTHON_BIN="$HOME/.pyenv/versions/$FULL_PY_VERSION/bin/python3"
+
+else
+  # ── Other distros: package manager ────────────────────────
+  if ! command -v "python$PY_VERSION" >/dev/null 2>&1; then
+    echo "python$PY_VERSION not found. Installing..."
+    case "$OS_TYPE" in
+      fedora) sudo dnf install -y "python$PY_VERSION" ;;
+      ubuntu) sudo apt-get install -y "python$PY_VERSION" "python${PY_VERSION}-venv" ;;
+      macos)  brew install "python@$PY_VERSION" ;;
+    esac
+  fi
+
+  if ! command -v "python$PY_VERSION" >/dev/null 2>&1; then
+    echo "❌ python$PY_VERSION could not be found after installation. Exiting."
+    exit 1
+  fi
+
+  PYTHON_BIN="$(command -v "python$PY_VERSION")"
 fi
-echo "✅ $("python$PY_VERSION" --version)"
+
+echo "✅ $("$PYTHON_BIN" --version)"
 
 # ─────────────────────────────────────────────────────────────
 # GPU / CUDA CHECK (skipped on macOS)
 # ─────────────────────────────────────────────────────────────
 if [ "$OS_TYPE" != "macos" ]; then
   echo "==> Checking NVIDIA GPU & CUDA"
-  if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "⚠️  Warning: nvidia-smi not found. Make sure your NVIDIA drivers are installed."
-    echo "   Visit https://www.nvidia.com/Download/index.aspx or use your distro's package manager."
-    echo "   Continuing anyway..."
-  else
+  if command -v nvidia-smi >/dev/null 2>&1; then
     echo "✅ NVIDIA GPU detected:"
     nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+  else
+    echo "⚠️  nvidia-smi not found. Make sure your NVIDIA drivers are installed."
+    echo "   Visit https://www.nvidia.com/Download/index.aspx or use your distro's package manager."
+    echo "   Continuing anyway..."
   fi
 
   echo "==> Checking CUDA toolkit"
-  if ! command -v nvcc >/dev/null 2>&1; then
-    echo "⚠️  Warning: nvcc not found. CUDA toolkit may not be installed."
-    echo "   PyTorch will still work if CUDA runtime is available."
-  else
+  if command -v nvcc >/dev/null 2>&1; then
     echo "✅ CUDA version: $(nvcc --version | grep release | awk '{print $6}' | tr -d ',')"
+  else
+    echo "⚠️  nvcc not found. CUDA toolkit may not be installed."
+    echo "   PyTorch will still work if CUDA runtime is available."
   fi
 else
   echo "==> macOS detected — skipping NVIDIA/CUDA check (not applicable)"
@@ -122,9 +208,9 @@ fi
 # ─────────────────────────────────────────────────────────────
 # CLONE / UPDATE COMFYUI
 # ─────────────────────────────────────────────────────────────
-echo "==> Clone / update of ComfyUI repo in ./$REPO_DIR"
+echo "==> Clone / update ComfyUI in ./$REPO_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
-  echo "The repo already exists. Getting latest changes..."
+  echo "Repo already exists. Pulling latest changes..."
   git -C "$REPO_DIR" pull --rebase
 else
   git clone "$REPO_URL" "$REPO_DIR"
@@ -147,16 +233,16 @@ fi
 # ─────────────────────────────────────────────────────────────
 # VIRTUALENV
 # ─────────────────────────────────────────────────────────────
-echo "==> Creating / reusing a virtualenv in $VENV_DIR"
+echo "==> Setting up virtualenv in $VENV_DIR"
 if [ -d "$VENV_DIR" ]; then
   echo "Existing virtualenv found, reusing it."
 else
-  "python$PY_VERSION" -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 VENV_PY="$VENV_DIR/bin/python"
 
-echo "==> Updating pip in the virtualenv"
+echo "==> Updating pip"
 "$VENV_PY" -m pip install --upgrade pip setuptools wheel
 
 # ─────────────────────────────────────────────────────────────
@@ -164,16 +250,18 @@ echo "==> Updating pip in the virtualenv"
 # ─────────────────────────────────────────────────────────────
 if [ "$OS_TYPE" = "macos" ]; then
   echo "==> Installing PyTorch (nightly, CPU — macOS)"
-  "$VENV_PY" -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
+  "$VENV_PY" -m pip install --pre torch torchvision \
+    --index-url https://download.pytorch.org/whl/nightly/cpu
 else
   echo "==> Installing PyTorch with CUDA support (cu130)"
-  "$VENV_PY" -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130
+  "$VENV_PY" -m pip install torch torchvision torchaudio \
+    --extra-index-url https://download.pytorch.org/whl/cu130
 fi
 
 # ─────────────────────────────────────────────────────────────
 # COMFYUI DEPENDENCIES
 # ─────────────────────────────────────────────────────────────
-echo "==> Installing ComfyUI dependencies in the virtualenv"
+echo "==> Installing ComfyUI dependencies"
 "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt"
 
 # ─────────────────────────────────────────────────────────────

@@ -10,17 +10,12 @@ VENV_PY="$REPO_DIR/.venv/bin/python"
 RESET="\033[0m"
 BOLD="\033[1m"
 DIM="\033[2m"
-
-BLACK="\033[0;30m"
-RED="\033[0;31m"
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
 BLUE="\033[0;34m"
 MAGENTA="\033[0;35m"
 CYAN="\033[0;36m"
 WHITE="\033[1;37m"
-
-BG_DARK="\033[48;5;234m"
 
 # ─────────────────────────────────────────────────────────────
 # HELPERS
@@ -41,21 +36,17 @@ row() {
   printf "  ${WHITE}%-18s${RESET}  %s\n" "$label" "$value"
 }
 
-not_found() {
-  echo -e "${DIM}N/A${RESET}"
-}
-
 # ─────────────────────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────────────────────
 clear
 echo ""
 echo -e "  ${BOLD}${MAGENTA}╔══════════════════════════════════════════════════╗${RESET}"
-echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}       ComfyUI — System Information             ${RESET}${BOLD}${MAGENTA}║${RESET}"
+echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}       ComfyUI — System Information              ${RESET}${BOLD}${MAGENTA}║${RESET}"
 echo -e "  ${BOLD}${MAGENTA}╚══════════════════════════════════════════════════╝${RESET}"
 
 # ─────────────────────────────────────────────────────────────
-# DETECT OS TYPE
+# DETECT PLATFORM
 # ─────────────────────────────────────────────────────────────
 UNAME_S="$(uname -s)"
 if [ "$UNAME_S" = "Darwin" ]; then
@@ -72,7 +63,7 @@ section_title "🖥️   SYSTEM"
 if [ "$PLATFORM" = "macos" ]; then
   OS_NAME="macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
   KERNEL="$(uname -r)"
-  CPU="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || not_found)"
+  CPU="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'N/A')"
   RAM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
   RAM_GB=$(( RAM_BYTES / 1024 / 1024 / 1024 ))
   RAM="${RAM_GB} GB"
@@ -83,7 +74,7 @@ else
     OS_NAME="$(uname -s) $(uname -r)"
   fi
   KERNEL="$(uname -r)"
-  CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //' || not_found)
+  CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ //' || echo 'N/A')
   RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
   RAM_GB=$(( RAM_KB / 1024 / 1024 ))
   RAM="${RAM_GB} GB"
@@ -100,13 +91,16 @@ row "RAM" "$RAM"
 section_title "⚡  GPU / CUDA"
 
 if [ "$PLATFORM" = "macos" ]; then
-  GPU_NAME=$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Chipset Model" | head -1 | cut -d: -f2 | sed 's/^ //' || echo "N/A")
+  GPU_NAME=$(system_profiler SPDisplaysDataType 2>/dev/null \
+    | grep "Chipset Model" | head -1 | cut -d: -f2 | sed 's/^ //' || echo "N/A")
   row "GPU" "${GREEN}$GPU_NAME${RESET}"
   row "CUDA" "${DIM}Not applicable on macOS${RESET}"
   row "Driver" "${DIM}Not applicable on macOS${RESET}"
   MPS_AVAILABLE="N/A"
-  if command -v "$VENV_PY" >/dev/null 2>&1; then
-    MPS_AVAILABLE=$("$VENV_PY" -c "import torch; print('Yes' if torch.backends.mps.is_available() else 'No')" 2>/dev/null || echo "N/A")
+  if [ -x "$VENV_PY" ]; then
+    MPS_AVAILABLE=$("$VENV_PY" -c \
+      "import torch; print('Yes' if torch.backends.mps.is_available() else 'No')" \
+      2>/dev/null || echo "N/A")
   fi
   row "MPS (Apple GPU)" "${GREEN}$MPS_AVAILABLE${RESET}"
 else
@@ -119,8 +113,8 @@ else
     row "NVIDIA Driver" "$DRIVER"
   else
     row "GPU" "${YELLOW}⚠️  nvidia-smi not found${RESET}"
-    row "VRAM" "$(not_found)"
-    row "NVIDIA Driver" "$(not_found)"
+    row "VRAM" "${DIM}N/A${RESET}"
+    row "NVIDIA Driver" "${DIM}N/A${RESET}"
   fi
 
   if command -v nvcc >/dev/null 2>&1; then
@@ -136,14 +130,12 @@ fi
 # ─────────────────────────────────────────────────────────────
 section_title "🐍  PYTHON"
 
-# Version used by ComfyUI venv
 if [ -x "$VENV_PY" ]; then
   COMFY_PY_VER=$("$VENV_PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 else
   COMFY_PY_VER="none"
 fi
 
-# Detect all python3.x versions installed on system
 FOUND_VERSIONS=()
 for ver in 3.11 3.12 3.13 3.14; do
   if command -v "python$ver" >/dev/null 2>&1; then
@@ -151,7 +143,18 @@ for ver in 3.11 3.12 3.13 3.14; do
   fi
 done
 
-# Build display string with color highlight on ComfyUI version
+# Also check pyenv versions
+if command -v pyenv >/dev/null 2>&1; then
+  export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
+  export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
+  while IFS= read -r pver; do
+    minor=$(echo "$pver" | grep -oE '^3\.(11|12|13|14)' || true)
+    if [ -n "$minor" ] && [[ ! " ${FOUND_VERSIONS[*]} " =~ " $minor " ]]; then
+      FOUND_VERSIONS+=("$minor")
+    fi
+  done < <(pyenv versions --bare 2>/dev/null || true)
+fi
+
 PY_DISPLAY=""
 for ver in "${FOUND_VERSIONS[@]}"; do
   if [ "$ver" = "$COMFY_PY_VER" ]; then
@@ -162,7 +165,7 @@ for ver in "${FOUND_VERSIONS[@]}"; do
 done
 
 if [ -z "$PY_DISPLAY" ]; then
-  PY_DISPLAY="$(not_found)"
+  PY_DISPLAY="${DIM}N/A${RESET}"
 fi
 
 row "Installed" "$(echo -e "$PY_DISPLAY")"
@@ -181,7 +184,6 @@ section_title "🔥  PYTORCH"
 
 if [ -x "$VENV_PY" ]; then
   TORCH_INFO=$("$VENV_PY" -c "
-import sys
 try:
   import torch
   cuda_available = torch.cuda.is_available()
@@ -217,7 +219,7 @@ except ImportError:
         TORCH_CUDA=$(echo "$TORCH_INFO" | grep "^cuda_version=" | cut -d= -f2)
         TORCH_GPU=$(echo "$TORCH_INFO" | grep "^gpu_name=" | cut -d= -f2)
         TORCH_VRAM=$(echo "$TORCH_INFO" | grep "^vram=" | cut -d= -f2)
-        row "CUDA" "${GREEN}Available ✅  (${TORCH_CUDA})${RESET}"
+        row "CUDA" "${GREEN}Available ✅  ($TORCH_CUDA)${RESET}"
         row "GPU" "${GREEN}$TORCH_GPU${RESET}"
         row "VRAM" "${GREEN}$TORCH_VRAM${RESET}"
       else
@@ -239,7 +241,6 @@ if [ -d "$REPO_DIR/.git" ]; then
   COMFY_COMMIT=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "N/A")
   COMFY_DATE=$(git -C "$REPO_DIR" log -1 --format="%ci" 2>/dev/null | cut -d' ' -f1 || echo "N/A")
   COMFY_MSG=$(git -C "$REPO_DIR" log -1 --format="%s" 2>/dev/null || echo "N/A")
-
   row "Branch" "${GREEN}$COMFY_BRANCH${RESET}"
   row "Commit" "${CYAN}$COMFY_COMMIT${RESET}  ${DIM}($COMFY_DATE)${RESET}"
   row "Last commit" "${DIM}$COMFY_MSG${RESET}"
@@ -247,7 +248,6 @@ else
   row "ComfyUI" "${YELLOW}⚠️  Not installed — run ./install.sh${RESET}"
 fi
 
-# ComfyUI-Manager
 MANAGER_DIR="$REPO_DIR/custom_nodes/comfyui-manager"
 if [ -d "$MANAGER_DIR/.git" ]; then
   MGR_COMMIT=$(git -C "$MANAGER_DIR" rev-parse --short HEAD 2>/dev/null || echo "N/A")
