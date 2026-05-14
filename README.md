@@ -33,7 +33,7 @@ A set of shell scripts to install, launch, update, and manage [ComfyUI](https://
 ### 1. Clone this repository
 
 ```bash
-git clone https://github.com/your-username/Comfy-Launcher-MultiOS.git
+git clone https://github.com/Black0S/Comfy-Launcher-MultiOS
 cd Comfy-Launcher-MultiOS
 ```
 
