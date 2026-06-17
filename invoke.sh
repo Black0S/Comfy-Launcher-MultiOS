@@ -2,20 +2,22 @@
 set -euo pipefail
 
 # ═════════════════════════════════════════════════════════════
-#  comfy.sh — All-in-one ComfyUI manager (install / launch /
+#  invoke.sh — All-in-one InvokeAI manager (install / launch /
 #  update / switch Python / system info) for Linux & macOS.
 #
-#  Just run:  ./comfy.sh   → an interactive menu appears.
+#  Just run:  ./invoke.sh   → an interactive menu appears.
 # ═════════════════════════════════════════════════════════════
 
 # ─────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────
-REPO_DIR="comfyui"
-REPO_URL="https://github.com/comfyanonymous/ComfyUI.git"
-MANAGER_URL="https://github.com/ltdrdata/ComfyUI-Manager"
-VENV_DIR="$REPO_DIR/.venv"
+# InvokeAI is installed with pip into a venv; models/config/outputs
+# live in a separate "root" directory (INVOKEAI_ROOT).
+INVOKE_DIR="invokeai"
+VENV_DIR="$INVOKE_DIR/.venv"
 VENV_PY="$VENV_DIR/bin/python"
+INVOKE_BIN="$VENV_DIR/bin/invokeai-web"
+ROOT_DIR="$INVOKE_DIR/root"
 
 # HTTPS (self-signed) certificate location
 CERT_DIR="certs"
@@ -23,11 +25,11 @@ TLS_KEY="$CERT_DIR/key.pem"
 TLS_CERT="$CERT_DIR/cert.pem"
 
 # Saved launch profiles (name<TAB>listen<TAB>port<TAB>tls<TAB>extra), one per line.
-COMFY_PROFILES_FILE="comfy-profiles.conf"
+INVOKE_PROFILES_FILE="invoke-profiles.conf"
 
 # PyTorch CUDA wheel channel (Linux). Override if your driver is older, e.g.:
-#   TORCH_CUDA_CHANNEL=cu128 ./comfy.sh
-TORCH_CUDA_CHANNEL="${TORCH_CUDA_CHANNEL:-cu130}"
+#   TORCH_CUDA_CHANNEL=cu121 ./invoke.sh
+TORCH_CUDA_CHANNEL="${TORCH_CUDA_CHANNEL:-cu124}"
 
 # ─────────────────────────────────────────────────────────────
 # COLORS
@@ -49,6 +51,11 @@ SEP="━━━━━━━━━━━━━━━━━━━━━━━━━
 # GENERIC HELPERS
 # ═════════════════════════════════════════════════════════════
 pause() { echo ""; read -rp "↩  Press Enter to return to the menu..." _ || true; }
+
+# True when we're on (or targeting) macOS.
+is_macos() {
+  [ "${OS_TYPE:-}" = "macos" ] || { [ -z "${OS_TYPE:-}" ] && [ "$(uname)" = "Darwin" ]; }
+}
 
 # Auto-detect the OS family. Returns non-zero if inconclusive.
 detect_os() {
@@ -109,9 +116,9 @@ prompt_python() {
   echo "$SEP"
   local entry num ver note
   for entry in \
-    "1|3.12|⚠️  Older but maximum compatibility with custom nodes" \
-    "2|3.13|✅  Recommended, compatible with most custom nodes" \
-    "3|3.14|🧪  Experimental, some custom nodes may not work"; do
+    "1|3.10|⚠️  Older but maximum compatibility" \
+    "2|3.11|✅  Recommended for InvokeAI" \
+    "3|3.12|🧪  Supported on recent InvokeAI releases"; do
     num="${entry%%|*}"; ver="${entry#*|}"; ver="${ver%%|*}"; note="${entry##*|}"
     if [ "$ver" = "$current" ]; then
       echo -e "  $num) ${YELLOW}Python $ver  ← already in use${RESET}  $note"
@@ -123,9 +130,9 @@ prompt_python() {
   while true; do
     read -rp "Your choice [1-3]: " PY_CHOICE
     case "$PY_CHOICE" in
-      1) PY_VERSION="3.12"; break ;;
-      2) PY_VERSION="3.13"; break ;;
-      3) PY_VERSION="3.14"; break ;;
+      1) PY_VERSION="3.10"; break ;;
+      2) PY_VERSION="3.11"; break ;;
+      3) PY_VERSION="3.12"; break ;;
       *) echo "❌ Invalid choice, try again." ;;
     esac
   done
@@ -140,7 +147,7 @@ pkg_install() {
   esac
 }
 
-# Resolve latest patch version from pyenv (e.g. 3.13 → 3.13.3)
+# Resolve latest patch version from pyenv (e.g. 3.11 → 3.11.9)
 get_latest_patch() {
   local major_minor="$1"
   pyenv install --list 2>/dev/null \
@@ -226,21 +233,33 @@ gpu_check() {
   fi
 }
 
+# pip-install (or upgrade) InvokeAI into the venv, with the right torch source.
+# Extra pip args (e.g. --upgrade) are passed through verbatim.
+pip_install_invokeai() {
+  if is_macos; then
+    echo "==> Installing InvokeAI (CPU/MPS — macOS)"
+    "$VENV_PY" -m pip install --use-pep517 "$@" InvokeAI
+  else
+    echo "==> Installing InvokeAI with CUDA support ($TORCH_CUDA_CHANNEL)"
+    "$VENV_PY" -m pip install --use-pep517 "$@" "InvokeAI[xformers]" \
+      --extra-index-url "https://download.pytorch.org/whl/$TORCH_CUDA_CHANNEL"
+  fi
+}
+
 install_pytorch() {
-  if [ "${OS_TYPE:-}" = "macos" ] || { [ -z "${OS_TYPE:-}" ] && [ "$(uname)" = "Darwin" ]; }; then
-    echo "==> Installing PyTorch (nightly, CPU/MPS — macOS)"
-    "$VENV_PY" -m pip install --pre torch torchvision \
-      --index-url https://download.pytorch.org/whl/nightly/cpu
+  if is_macos; then
+    echo "==> Installing PyTorch (CPU/MPS — macOS)"
+    "$VENV_PY" -m pip install --upgrade torch torchvision
   else
     echo "==> Installing PyTorch with CUDA support ($TORCH_CUDA_CHANNEL)"
-    "$VENV_PY" -m pip install torch torchvision torchaudio \
+    "$VENV_PY" -m pip install --upgrade torch torchvision \
       --index-url "https://download.pytorch.org/whl/$TORCH_CUDA_CHANNEL"
   fi
 }
 
 torch_check() {
   echo "📊 PyTorch check:"
-  if [ "${OS_TYPE:-}" = "macos" ] || { [ -z "${OS_TYPE:-}" ] && [ "$(uname)" = "Darwin" ]; }; then
+  if is_macos; then
     "$VENV_PY" -c '
 import torch
 print("PyTorch:", torch.__version__)
@@ -284,15 +303,11 @@ ensure_cert() {
 # ═════════════════════════════════════════════════════════════
 
 cmd_install() {
-  echo ""; echo "$SEP"; echo "  ${BOLD}Install / Reinstall ComfyUI${RESET}"; echo "$SEP"
+  echo ""; echo "$SEP"; echo "  ${BOLD}Install / Reinstall InvokeAI${RESET}"; echo "$SEP"
   resolve_os
   echo ""
   prompt_python
   echo "✅ Selected: Python $PY_VERSION"; echo ""
-
-  echo "==> Checking system dependencies"
-  command -v git >/dev/null 2>&1 || pkg_install git
-  echo "✅ git $(git --version | awk '{print $3}')"
 
   ensure_python
 
@@ -302,21 +317,8 @@ cmd_install() {
     echo "==> macOS detected — skipping NVIDIA/CUDA check (not applicable)"
   fi
 
-  echo "==> Clone / update ComfyUI in ./$REPO_DIR"
-  if [ -d "$REPO_DIR/.git" ]; then
-    git -C "$REPO_DIR" pull --rebase
-  else
-    git clone "$REPO_URL" "$REPO_DIR"
-  fi
-
-  echo "==> Installing ComfyUI-Manager"
-  local cn="$REPO_DIR/custom_nodes" mgr="$REPO_DIR/custom_nodes/comfyui-manager"
-  mkdir -p "$cn"
-  if [ -d "$mgr/.git" ]; then
-    git -C "$mgr" pull --rebase
-  else
-    git clone "$MANAGER_URL" "$mgr"
-  fi
+  echo "==> Preparing InvokeAI directory ./$INVOKE_DIR"
+  mkdir -p "$INVOKE_DIR"
 
   echo "==> Setting up virtualenv in $VENV_DIR"
   if [ ! -d "$VENV_DIR" ]; then
@@ -328,10 +330,10 @@ cmd_install() {
   echo "==> Updating pip"
   "$VENV_PY" -m pip install --upgrade pip setuptools wheel
 
-  install_pytorch
+  pip_install_invokeai
 
-  echo "==> Installing ComfyUI dependencies"
-  "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt"
+  echo "==> Creating InvokeAI root in ./$ROOT_DIR"
+  mkdir -p "$ROOT_DIR"
 
   echo ""; echo "✅ Installation complete!"; echo "$SEP"
   torch_check
@@ -343,7 +345,7 @@ cmd_install() {
 # File format: name<TAB>listen<TAB>port<TAB>tls(0|1)<TAB>extra-flags
 
 profiles_count() {
-  if [ -f "$COMFY_PROFILES_FILE" ]; then awk 'END{print NR}' "$COMFY_PROFILES_FILE"; else echo 0; fi
+  if [ -f "$INVOKE_PROFILES_FILE" ]; then awk 'END{print NR}' "$INVOKE_PROFILES_FILE"; else echo 0; fi
 }
 
 # Human-readable URL for a profile.
@@ -360,24 +362,24 @@ list_profiles() {
     i=$((i+1))
     printf "    ${WHITE}%d)${RESET} %-14s ${DIM}→  %s${RESET}\n" \
       "$i" "$name" "$(profile_url "$listen" "$port" "$tls")"
-  done < "$COMFY_PROFILES_FILE"
+  done < "$INVOKE_PROFILES_FILE"
 }
 
 # Load profile N into PROF_NAME / PROF_LISTEN / PROF_PORT / PROF_TLS / PROF_EXTRA.
 load_profile() {
-  local line; line="$(sed -n "${1}p" "$COMFY_PROFILES_FILE")"
+  local line; line="$(sed -n "${1}p" "$INVOKE_PROFILES_FILE")"
   IFS=$'\t' read -r PROF_NAME PROF_LISTEN PROF_PORT PROF_TLS PROF_EXTRA <<< "$line"
   PROF_EXTRA="${PROF_EXTRA:-}"
 }
 
 save_profile() {
-  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$COMFY_PROFILES_FILE"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$INVOKE_PROFILES_FILE"
 }
 
 delete_profile() {
   local tmp; tmp="$(mktemp)"
-  awk -v n="$1" 'NR!=n' "$COMFY_PROFILES_FILE" > "$tmp"
-  mv "$tmp" "$COMFY_PROFILES_FILE"
+  awk -v n="$1" 'NR!=n' "$INVOKE_PROFILES_FILE" > "$tmp"
+  mv "$tmp" "$INVOKE_PROFILES_FILE"
 }
 
 # replace_profile N name listen port tls extra
@@ -391,15 +393,15 @@ replace_profile() {
     else
       printf '%s\n' "$ln" >> "$tmp"
     fi
-  done < "$COMFY_PROFILES_FILE"
-  mv "$tmp" "$COMFY_PROFILES_FILE"
+  done < "$INVOKE_PROFILES_FILE"
+  mv "$tmp" "$INVOKE_PROFILES_FILE"
 }
 
 # Prompt for a custom listen address + port. Sets LISTEN_ADDR and PORT.
 prompt_address() {
   local a p
   read -rp "Listen address [0.0.0.0]: " a; LISTEN_ADDR="${a:-0.0.0.0}"
-  read -rp "Port [8188]: " p;            PORT="${p:-8188}"
+  read -rp "Port [9090]: " p;            PORT="${p:-9090}"
 }
 
 # Edit/delete an existing profile interactively.
@@ -443,22 +445,25 @@ edit_profile() {
   echo "  ✅ Updated '$name'."
 }
 
-# Build args from LISTEN_ADDR / PORT / USE_TLS / EXTRA and exec ComfyUI.
+# Build env from LISTEN_ADDR / PORT / USE_TLS / EXTRA and exec InvokeAI.
 do_launch() {
-  local ARGS=( --listen "$LISTEN_ADDR" --port "$PORT" )
   local SCHEME="http"
+  local root_abs; root_abs="$(cd "$(dirname "$ROOT_DIR")" && pwd)/$(basename "$ROOT_DIR")"
+
+  # InvokeAI reads all settings from INVOKEAI_* environment variables.
+  export INVOKEAI_ROOT="$root_abs"
+  export INVOKEAI_HOST="$LISTEN_ADDR"
+  export INVOKEAI_PORT="$PORT"
+
   if [ "$USE_TLS" = "1" ]; then
     ensure_cert || return 0
-    ARGS+=( --tls-keyfile "$TLS_KEY" --tls-certfile "$TLS_CERT" )
+    export INVOKEAI_SSL_CERTFILE="$PWD/$TLS_CERT"
+    export INVOKEAI_SSL_KEYFILE="$PWD/$TLS_KEY"
     SCHEME="https"
   fi
 
-  # Pin the first NVIDIA GPU on Linux when present.
-  if [ "$(uname)" != "Darwin" ] && command -v nvidia-smi >/dev/null 2>&1; then
-    ARGS+=( --cuda-device 0 )
-  fi
-
   # Append any extra flags (word-split on purpose).
+  local ARGS=()
   if [ -n "${EXTRA:-}" ]; then
     # shellcheck disable=SC2206
     ARGS+=( $EXTRA )
@@ -466,33 +471,34 @@ do_launch() {
 
   if [ "$LISTEN_ADDR" != "127.0.0.1" ] && [ "$LISTEN_ADDR" != "localhost" ]; then
     echo ""
-    echo -e "  ${YELLOW}⚠️  SECURITY:${RESET} ComfyUI has no authentication. Listening on"
-    echo -e "  ${YELLOW}   '$LISTEN_ADDR' exposes the full UI (and code execution via custom"
-    echo -e "  ${YELLOW}   nodes) to anyone who can reach it. Use only on a trusted network${RESET}"
+    echo -e "  ${YELLOW}⚠️  SECURITY:${RESET} InvokeAI has no authentication. Listening on"
+    echo -e "  ${YELLOW}   '$LISTEN_ADDR' exposes the full UI (and the model/file APIs)"
+    echo -e "  ${YELLOW}   to anyone who can reach it. Use only on a trusted network${RESET}"
     echo -e "  ${YELLOW}   (e.g. Tailscale), or behind an authenticated reverse proxy.${RESET}"
   fi
 
   local host="$LISTEN_ADDR"
   [ "$LISTEN_ADDR" = "0.0.0.0" ] && host="<this-machine-IP>"
   echo ""
-  echo "🚀 Starting ComfyUI..."
+  echo "🚀 Starting InvokeAI..."
+  echo "   Root: $INVOKEAI_ROOT"
   echo "   Open your browser at: $SCHEME://$host:$PORT"
   echo ""
-  exec "$VENV_PY" "$REPO_DIR/main.py" "${ARGS[@]}"
+  exec "$INVOKE_BIN" ${ARGS[@]+"${ARGS[@]}"}
 }
 
 # Interactive "new launch" flow (choose mode, optionally save), then launch.
 configure_launch() {
   echo ""
-  echo "  How do you want to serve ComfyUI?"
+  echo "  How do you want to serve InvokeAI?"
   echo "$SEP"
-  echo "  1) Local            — http://127.0.0.1:8188"
+  echo "  1) Local            — http://127.0.0.1:9090"
   echo "  2) Custom address   — choose IP + port (HTTP)"
-  echo "  3) Local HTTPS      — https://127.0.0.1:8188 (self-signed)"
+  echo "  3) Local HTTPS      — https://127.0.0.1:9090 (self-signed)"
   echo "  4) Custom HTTPS     — choose IP + port (self-signed)"
   echo "$SEP"
 
-  USE_TLS=0; LISTEN_ADDR="127.0.0.1"; PORT="8188"; EXTRA=""
+  USE_TLS=0; LISTEN_ADDR="127.0.0.1"; PORT="9090"; EXTRA=""
   local MODE
   while true; do
     read -rp "Your choice [1-4]: " MODE
@@ -505,25 +511,25 @@ configure_launch() {
     esac
   done
 
-  read -rp "Extra flags (optional, e.g. --lowvram --use-split-cross-attention) [none]: " EXTRA
+  read -rp "Extra flags (optional, passed to invokeai-web) [none]: " EXTRA
 
   local pname
   read -rp "Save this as a profile? Enter a name (empty = don't save): " pname
   if [ -n "$pname" ]; then
     save_profile "$pname" "$LISTEN_ADDR" "$PORT" "$USE_TLS" "$EXTRA"
-    echo "✅ Saved profile '$pname' (in $COMFY_PROFILES_FILE)."
+    echo "✅ Saved profile '$pname' (in $INVOKE_PROFILES_FILE)."
   fi
 
   do_launch
 }
 
 cmd_launch() {
-  echo ""; echo "$SEP"; echo "  ${BOLD}Launch ComfyUI${RESET}"; echo "$SEP"
-  if [ ! -d "$REPO_DIR" ]; then
-    echo "❌ Directory $REPO_DIR not found. Run Install (option 1) first."; return 0
+  echo ""; echo "$SEP"; echo "  ${BOLD}Launch InvokeAI${RESET}"; echo "$SEP"
+  if [ ! -d "$INVOKE_DIR" ]; then
+    echo "❌ Directory $INVOKE_DIR not found. Run Install (option 1) first."; return 0
   fi
-  if [ ! -x "$VENV_PY" ]; then
-    echo "❌ Virtualenv not found. Run Install (option 1) first."; return 0
+  if [ ! -x "$INVOKE_BIN" ]; then
+    echo "❌ InvokeAI not found in venv. Run Install (option 1) first."; return 0
   fi
 
   local n c
@@ -557,28 +563,20 @@ cmd_launch() {
   done
 }
 
-cmd_update_comfyui() {
-  echo ""; echo "$SEP"; echo "  ${BOLD}Update ComfyUI${RESET}"; echo "$SEP"
-  if [ ! -d "$REPO_DIR/.git" ]; then
-    echo "❌ Repository $REPO_DIR not found. Run Install (option 1) first."; return 0
+cmd_update_invoke() {
+  echo ""; echo "$SEP"; echo "  ${BOLD}Update InvokeAI${RESET}"; echo "$SEP"
+  if [ ! -d "$INVOKE_DIR" ] || [ ! -x "$VENV_PY" ]; then
+    echo "❌ No venv found. Run Install (option 1) first."; return 0
   fi
-  echo "==> Fetching remote branches"
-  git -C "$REPO_DIR" fetch --all --prune
-  local branch; branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
-  echo "==> Pull --rebase on branch $branch"
-  git -C "$REPO_DIR" pull --rebase
-  [ -f "$REPO_DIR/.gitmodules" ] && git -C "$REPO_DIR" submodule update --init --recursive
-  if [ -x "$VENV_PY" ]; then
-    echo "==> Updating venv dependencies"
-    "$VENV_PY" -m pip install --upgrade pip setuptools wheel
-    "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt"
-  fi
+  echo "==> Updating pip"
+  "$VENV_PY" -m pip install --upgrade pip setuptools wheel
+  pip_install_invokeai --upgrade
   echo ""; echo "✅ Update complete."
 }
 
 cmd_update_torch() {
   echo ""; echo "$SEP"; echo "  ${BOLD}Update PyTorch${RESET}"; echo "$SEP"
-  if [ ! -d "$REPO_DIR" ] || [ ! -x "$VENV_PY" ]; then
+  if [ ! -d "$INVOKE_DIR" ] || [ ! -x "$VENV_PY" ]; then
     echo "❌ No venv found. Run Install (option 1) first."; return 0
   fi
   resolve_os
@@ -591,7 +589,7 @@ cmd_update_torch() {
 
 cmd_switchpy() {
   echo ""; echo "$SEP"; echo "  ${BOLD}Switch Python version${RESET}"; echo "$SEP"
-  if [ ! -d "$REPO_DIR" ] || [ ! -x "$VENV_PY" ]; then
+  if [ ! -d "$INVOKE_DIR" ] || [ ! -x "$VENV_PY" ]; then
     echo "❌ No venv found. Run Install (option 1) first."; return 0
   fi
   local current; current="$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
@@ -610,11 +608,10 @@ cmd_switchpy() {
   "$PYTHON_BIN" -m venv "$VENV_DIR"
   echo "==> Updating pip"
   "$VENV_PY" -m pip install --upgrade pip setuptools wheel
-  install_pytorch
-  echo "==> Installing ComfyUI dependencies"
-  "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt"
+  pip_install_invokeai
   echo ""; echo "✅ Switch complete!"; echo "$SEP"
   echo -e "  Python: ${GREEN}$current → $PY_VERSION${RESET}"
+  echo -e "  ${DIM}Your models & config in ./$ROOT_DIR are untouched.${RESET}"
   torch_check
 }
 
@@ -629,7 +626,7 @@ cmd_info() {
 
   echo ""
   echo -e "  ${BOLD}${MAGENTA}╔══════════════════════════════════════════════════╗${RESET}"
-  echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}       ComfyUI — System Information             ${RESET}${BOLD}${MAGENTA}║${RESET}"
+  echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}       InvokeAI — System Information            ${RESET}${BOLD}${MAGENTA}║${RESET}"
   echo -e "  ${BOLD}${MAGENTA}╚══════════════════════════════════════════════════╝${RESET}"
 
   if [ "$(uname -s)" = "Darwin" ]; then platform="macos"; else platform="linux"; fi
@@ -675,10 +672,10 @@ cmd_info() {
 
   # ── PYTHON ──
   section_title "🐍  PYTHON"
-  local comfy_py="none"
-  [ -x "$VENV_PY" ] && comfy_py=$("$VENV_PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+  local invoke_py="none"
+  [ -x "$VENV_PY" ] && invoke_py=$("$VENV_PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
   local FOUND_VERSIONS=() ver
-  for ver in 3.11 3.12 3.13 3.14; do
+  for ver in 3.10 3.11 3.12 3.13; do
     command -v "python$ver" >/dev/null 2>&1 && FOUND_VERSIONS+=("$ver")
   done
   if command -v pyenv >/dev/null 2>&1; then
@@ -686,7 +683,7 @@ cmd_info() {
     export PATH="$PYENV_ROOT/bin:$PYENV_ROOT/shims:$PATH"
     local pver minor
     while IFS= read -r pver; do
-      minor=$(echo "$pver" | grep -oE '^3\.(11|12|13|14)' || true)
+      minor=$(echo "$pver" | grep -oE '^3\.(10|11|12|13)' || true)
       if [ -n "$minor" ] && [[ ! " ${FOUND_VERSIONS[*]:-} " =~ " $minor " ]]; then
         FOUND_VERSIONS+=("$minor")
       fi
@@ -695,15 +692,15 @@ cmd_info() {
   local py_display=""
   if [ ${#FOUND_VERSIONS[@]} -gt 0 ]; then
     for ver in "${FOUND_VERSIONS[@]}"; do
-      if [ "$ver" = "$comfy_py" ]; then py_display+="${GREEN}● $ver (ComfyUI)${RESET}  "; else py_display+="${DIM}$ver${RESET}  "; fi
+      if [ "$ver" = "$invoke_py" ]; then py_display+="${GREEN}● $ver (InvokeAI)${RESET}  "; else py_display+="${DIM}$ver${RESET}  "; fi
     done
   fi
   [ -z "$py_display" ] && py_display="${DIM}N/A${RESET}"
   row "Installed" "$(echo -e "$py_display")"
   if [ -x "$VENV_PY" ]; then
-    row "ComfyUI venv" "${GREEN}Python $("$VENV_PY" --version 2>&1 | awk '{print $2}')${RESET}"
+    row "InvokeAI venv" "${GREEN}Python $("$VENV_PY" --version 2>&1 | awk '{print $2}')${RESET}"
   else
-    row "ComfyUI venv" "${YELLOW}⚠️  No venv found — run Install${RESET}"
+    row "InvokeAI venv" "${YELLOW}⚠️  No venv found — run Install${RESET}"
   fi
 
   # ── PYTORCH ──
@@ -748,20 +745,25 @@ except ImportError:
     row "PyTorch" "${YELLOW}⚠️  No venv found — run Install${RESET}"
   fi
 
-  # ── COMFYUI ──
-  section_title "🎨  COMFYUI"
-  if [ -d "$REPO_DIR/.git" ]; then
-    row "Branch" "${GREEN}$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo N/A)${RESET}"
-    row "Commit" "${CYAN}$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo N/A)${RESET}  ${DIM}($(git -C "$REPO_DIR" log -1 --format='%ci' 2>/dev/null | cut -d' ' -f1))${RESET}"
-    row "Last commit" "${DIM}$(git -C "$REPO_DIR" log -1 --format='%s' 2>/dev/null || echo N/A)${RESET}"
+  # ── INVOKEAI ──
+  section_title "🎨  INVOKEAI"
+  if [ -x "$VENV_PY" ]; then
+    local iv; iv=$("$VENV_PY" -m pip show invokeai 2>/dev/null | awk -F': ' '/^Version/{print $2}')
+    if [ -n "$iv" ]; then
+      row "Version" "${GREEN}$iv${RESET}"
+    else
+      row "InvokeAI" "${YELLOW}⚠️  Not installed in venv${RESET}"
+    fi
   else
-    row "ComfyUI" "${YELLOW}⚠️  Not installed — run Install${RESET}"
+    row "InvokeAI" "${YELLOW}⚠️  No venv found — run Install${RESET}"
   fi
-  local mgr="$REPO_DIR/custom_nodes/comfyui-manager"
-  if [ -d "$mgr/.git" ]; then
-    row "Manager" "${GREEN}Installed${RESET}  ${DIM}commit $(git -C "$mgr" rev-parse --short HEAD 2>/dev/null) ($(git -C "$mgr" log -1 --format='%ci' 2>/dev/null | cut -d' ' -f1))${RESET}"
+  if [ -d "$ROOT_DIR" ]; then
+    row "Root" "${GREEN}$ROOT_DIR${RESET}"
+    local models_n
+    models_n=$(find "$ROOT_DIR/models" -mindepth 1 -maxdepth 3 -type f 2>/dev/null | wc -l | tr -d ' ')
+    row "Model files" "${CYAN}${models_n:-0}${RESET}"
   else
-    row "Manager" "${YELLOW}⚠️  Not found${RESET}"
+    row "Root" "${YELLOW}⚠️  Not initialized — run Install${RESET}"
   fi
   echo ""
 }
@@ -774,12 +776,12 @@ main_menu() {
     clear 2>/dev/null || true
     echo ""
     echo -e "  ${BOLD}${MAGENTA}╔══════════════════════════════════════════════════╗${RESET}"
-    echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}        Comfy-Launcher  —  comfy.sh             ${RESET}${BOLD}${MAGENTA}║${RESET}"
+    echo -e "  ${BOLD}${MAGENTA}║${RESET}  ${BOLD}${WHITE}        Invoke-Launcher  —  invoke.sh           ${RESET}${BOLD}${MAGENTA}║${RESET}"
     echo -e "  ${BOLD}${MAGENTA}╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
-    echo -e "    ${WHITE}1)${RESET} 📦  Install / Reinstall ComfyUI"
-    echo -e "    ${WHITE}2)${RESET} 🚀  Launch ComfyUI  ${DIM}(HTTP / HTTPS / custom address)${RESET}"
-    echo -e "    ${WHITE}3)${RESET} 🔄  Update ComfyUI"
+    echo -e "    ${WHITE}1)${RESET} 📦  Install / Reinstall InvokeAI"
+    echo -e "    ${WHITE}2)${RESET} 🚀  Launch InvokeAI  ${DIM}(HTTP / HTTPS / custom address)${RESET}"
+    echo -e "    ${WHITE}3)${RESET} 🔄  Update InvokeAI"
     echo -e "    ${WHITE}4)${RESET} 🔥  Update PyTorch"
     echo -e "    ${WHITE}5)${RESET} 🐍  Switch Python version"
     echo -e "    ${WHITE}6)${RESET} 📊  System info"
@@ -787,12 +789,12 @@ main_menu() {
     echo ""
     read -rp "  Your choice: " CHOICE
     case "$CHOICE" in
-      1) cmd_install;        pause ;;
-      2) cmd_launch;         pause ;;
-      3) cmd_update_comfyui; pause ;;
-      4) cmd_update_torch;   pause ;;
-      5) cmd_switchpy;       pause ;;
-      6) cmd_info;           pause ;;
+      1) cmd_install;       pause ;;
+      2) cmd_launch;        pause ;;
+      3) cmd_update_invoke; pause ;;
+      4) cmd_update_torch;  pause ;;
+      5) cmd_switchpy;      pause ;;
+      6) cmd_info;          pause ;;
       0|q|Q) echo "Bye! 👋"; exit 0 ;;
       *) echo "❌ Invalid choice."; sleep 1 ;;
     esac
