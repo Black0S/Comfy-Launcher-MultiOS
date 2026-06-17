@@ -5,7 +5,8 @@ comfyui/
 certs/
 
 # Saved launch profiles (may contain private addresses, e.g. Tailscale IPs)
-profiles.conf
+comfy-profiles.conf
+invoke-profiles.conf
 
 # macOS
 .DS_Store
