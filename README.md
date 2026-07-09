@@ -2,6 +2,8 @@
 
 A single Bash script (`comfy.sh`) to install, launch, update, and manage [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on Linux and macOS — with multi-OS support, Python version selection, HTTPS, saved launch profiles, and a clean terminal interface.
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/C0C11HGDJV)
+
 ---
 
 ## ✨ Features
